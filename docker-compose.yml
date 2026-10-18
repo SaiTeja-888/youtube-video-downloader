@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     container_name: media_downloader_backend
+    restart: always
     env_file:
       - .env
     environment:

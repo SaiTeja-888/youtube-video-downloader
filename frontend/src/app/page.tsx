@@ -78,8 +78,15 @@ const getApiBase = () => {
     const trimmed = process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/+$/, "");
     return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
   }
-  if (typeof window !== "undefined" && window.location.hostname !== "localhost") {
-    return "/api";
+  if (typeof window !== "undefined") {
+    // If accessed via default HTTP/HTTPS (port 80/443 e.g. NGINX) or remote host
+    if (!window.location.port || window.location.port === "80" || window.location.port === "443" || window.location.hostname !== "localhost") {
+      return "/api";
+    }
+    // If running standalone dev server on port 3000
+    if (window.location.port === "3000") {
+      return `http://${window.location.hostname}:8000/api`;
+    }
   }
   return "http://localhost:8000/api";
 };

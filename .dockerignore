@@ -2,10 +2,11 @@
 .codex
 .agents
 .pytest_cache
+.venv
+venv
 backend/venv
-backend/__pycache__
-backend/app/__pycache__
-backend/app/**/__pycache__
+__pycache__
+**/__pycache__
 backend/*.db
 backend/*.log
 downloads

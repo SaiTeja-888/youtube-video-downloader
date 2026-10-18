@@ -93,7 +93,7 @@ def health_check(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
 
-    overall_status = "healthy" if (postgres_status == "healthy" and redis_status == "healthy") else "unhealthy"
+    overall_status = "healthy" if postgres_status == "healthy" else "unhealthy"
     
     return HealthResponse(
         status=overall_status,

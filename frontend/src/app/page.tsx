@@ -72,8 +72,13 @@ const playGlassSound = () => {
   }
 };
 
-// Get API base path
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+// Get API base path with automatic normalization
+const getApiBase = () => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+  const trimmed = envUrl.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+};
+const API_BASE = getApiBase();
 
 interface MediaFormat {
   format_id: string;
@@ -222,8 +227,14 @@ export default function Home() {
       setMetadata(response.data);
     } catch (err: unknown) {
       let msg = "Could not analyze the link. Make sure the URL is valid and supported.";
-      if (axios.isAxiosError(err) && err.response?.data?.detail) {
-        msg = err.response.data.detail;
+      if (axios.isAxiosError(err)) {
+        if (err.response?.status === 404) {
+          msg = "API endpoint not found (404). Please ensure the backend is running and NEXT_PUBLIC_API_URL is configured correctly.";
+        } else if (err.response?.data?.detail) {
+          msg = err.response.data.detail;
+        } else if (err.message) {
+          msg = err.message;
+        }
       } else if (err instanceof Error) {
         msg = err.message;
       }
@@ -264,8 +275,14 @@ export default function Home() {
       pollJobStatus(jobId);
     } catch (err: unknown) {
       let msg = "Failed to trigger download job.";
-      if (axios.isAxiosError(err) && err.response?.data?.detail) {
-        msg = err.response.data.detail;
+      if (axios.isAxiosError(err)) {
+        if (err.response?.status === 404) {
+          msg = "API endpoint not found (404). Please ensure the backend is running and NEXT_PUBLIC_API_URL is configured correctly.";
+        } else if (err.response?.data?.detail) {
+          msg = err.response.data.detail;
+        } else if (err.message) {
+          msg = err.message;
+        }
       } else if (err instanceof Error) {
         msg = err.message;
       }

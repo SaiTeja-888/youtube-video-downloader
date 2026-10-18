@@ -16,8 +16,13 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-// API Base configuration
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+// API Base configuration with automatic normalization
+const getApiBase = () => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+  const trimmed = envUrl.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+};
+const API_BASE = getApiBase();
 
 const playGlassSound = () => {
   try {

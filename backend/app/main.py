@@ -68,6 +68,11 @@ app.add_middleware(
 # Serves downloads directory
 app.mount("/api/files", StaticFiles(directory=settings.DOWNLOAD_DIR), name="files")
 
+@app.get("/")
+def root():
+    return {"status": "online", "message": "POSTLINK media downloader API is running", "docs": "/docs"}
+
+@app.get("/health", response_model=HealthResponse)
 @app.get("/api/health", response_model=HealthResponse)
 def health_check(db: Session = Depends(get_db)):
     postgres_status = "unhealthy"
@@ -97,6 +102,7 @@ def health_check(db: Session = Depends(get_db)):
         rabbitmq=rabbitmq_status
     )
 
+@app.post("/analyze")
 @app.post("/api/analyze")
 @limiter.limit(settings.RATE_LIMIT_ANALYZE)
 def analyze_url(request: Request, payload: AnalyzeRequest):
@@ -157,6 +163,7 @@ def analyze_url(request: Request, payload: AnalyzeRequest):
             detail=detail
         )
 
+@app.post("/download")
 @app.post("/api/download")
 @limiter.limit(settings.RATE_LIMIT_DOWNLOAD)
 def start_download(request: Request, payload: DownloadRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -225,6 +232,7 @@ def start_download(request: Request, payload: DownloadRequest, background_tasks:
             detail=f"Could not initiate download job: {str(e)}"
         )
 
+@app.get("/status/{job_id}", response_model=JobStatusResponse)
 @app.get("/api/status/{job_id}", response_model=JobStatusResponse)
 def get_status(job_id: str, db: Session = Depends(get_db)):
     # Check redis first
@@ -259,6 +267,7 @@ def get_status(job_id: str, db: Session = Depends(get_db)):
 
     return res
 
+@app.get("/download-file/{job_id}")
 @app.get("/api/download-file/{job_id}")
 def download_file(job_id: str, db: Session = Depends(get_db)):
     """Serve a completed download file with Content-Disposition: attachment to force browser download."""
@@ -286,6 +295,7 @@ def download_file(job_id: str, db: Session = Depends(get_db)):
         }
     )
 
+@app.get("/admin/stats", response_model=SystemStatsResponse)
 @app.get("/api/admin/stats", response_model=SystemStatsResponse)
 def get_admin_stats(db: Session = Depends(get_db)):
     # Totals
@@ -329,6 +339,7 @@ def get_admin_stats(db: Session = Depends(get_db)):
         health=health
     )
 
+@app.get("/admin/logs")
 @app.get("/api/admin/logs")
 def get_admin_logs():
     if not os.path.exists(log_file):

@@ -67,14 +67,47 @@ class YtdlpProvider(BaseProvider):
             pass
         return False, '', ''
 
+    def _normalize_cookie_content(self, text: str) -> str:
+        if not text:
+            return ""
+        import base64
+        # Handle base64 encoded cookies
+        try:
+            decoded = base64.b64decode(text.strip()).decode('utf-8')
+            if "youtube.com" in decoded or "google.com" in decoded or "NETSCAPE" in decoded.upper():
+                text = decoded
+        except Exception:
+            pass
+
+        # Handle literal escaped newlines
+        if "\\n" in text and "\n" not in text:
+            text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+
+        lines = text.splitlines()
+        out = ["# Netscape HTTP Cookie File", "# Auto-normalized by YtdlpProvider"]
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 6)
+            if len(parts) >= 7:
+                domain, flag, path, secure, expiration, name, value = parts
+                out.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}")
+            elif len(parts) == 6:
+                domain, flag, path, secure, expiration, name = parts
+                out.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t")
+        return "\n".join(out) + "\n"
+
     def _cookies_file(self) -> str | None:
+        import tempfile
         # 1. Check raw cookie text from environment variable (ideal for Render env vars)
-        raw_cookies = os.environ.get("COOKIES_TEXT") or os.environ.get("YOUTUBE_COOKIES")
+        raw_cookies = os.environ.get("COOKIES_TEXT") or os.environ.get("YOUTUBE_COOKIES") or os.environ.get("COOKIES_BASE64")
         if raw_cookies and raw_cookies.strip():
-            auto_path = os.path.join(settings.DOWNLOAD_DIR, "auto_cookies.txt")
+            normalized = self._normalize_cookie_content(raw_cookies)
+            auto_path = os.path.join(tempfile.gettempdir(), "postlink_auto_cookies.txt")
             try:
                 with open(auto_path, "w", encoding="utf-8") as f:
-                    f.write(raw_cookies.strip())
+                    f.write(normalized)
                 return auto_path
             except Exception:
                 pass
@@ -87,7 +120,16 @@ class YtdlpProvider(BaseProvider):
         # 3. Check Render Secret Files default mount path
         render_secret = "/etc/secrets/cookies.txt"
         if os.path.exists(render_secret):
-            return render_secret
+            try:
+                with open(render_secret, "r", encoding="utf-8") as f:
+                    sec_content = f.read()
+                normalized = self._normalize_cookie_content(sec_content)
+                sec_path = os.path.join(tempfile.gettempdir(), "postlink_render_cookies.txt")
+                with open(sec_path, "w", encoding="utf-8") as f:
+                    f.write(normalized)
+                return sec_path
+            except Exception:
+                return render_secret
 
         # 4. Check local backend directory
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -217,23 +259,28 @@ class YtdlpProvider(BaseProvider):
             err_lower = str(exc).lower()
             # If cookie lock, bot detection, or player response error occurred, try fallback clients
             if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429", "player response", "requested format", "unable to download"]):
-                # Try fallback 1: Pure Android client
-                for fb_clients in [['android'], ['android', 'ios'], ['tv']]:
-                    try:
-                        fallback_opts = dict(ydl_opts)
-                        fallback_opts.pop('cookiesfrombrowser', None)
-                        fallback_opts.pop('cookiefile', None)
-                        fallback_opts['extractor_args'] = {
-                            'youtube': {
-                                'player_client': fb_clients
+                # Try fallbacks: first preserving valid cookies, then without
+                cookie_tries = [True, False] if ydl_opts.get('cookiefile') else [False]
+                for use_cookie in cookie_tries:
+                    for fb_clients in [['android'], ['android', 'ios'], ['tv']]:
+                        try:
+                            fallback_opts = dict(ydl_opts)
+                            fallback_opts.pop('cookiesfrombrowser', None)
+                            if not use_cookie:
+                                fallback_opts.pop('cookiefile', None)
+                            fallback_opts['extractor_args'] = {
+                                'youtube': {
+                                    'player_client': fb_clients
+                                }
                             }
-                        }
-                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                            info = ydl_fb.extract_info(url, download=False)
-                            if info and info.get('formats'):
-                                break
-                    except Exception:
-                        continue
+                            with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                                info = ydl_fb.extract_info(url, download=False)
+                                if info and info.get('formats'):
+                                    break
+                        except Exception:
+                            continue
+                    if info and info.get('formats'):
+                        break
             if not info:
                 # Fallback to check if URL content is directly accessible as a media file
                 try:
@@ -597,7 +644,8 @@ class YtdlpProvider(BaseProvider):
                 # If YouTube bot/cookie/player response error happened, switch to android client for next attempt
                 elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429", "player response", "unable to download"]):
                     ydl_opts.pop('cookiesfrombrowser', None)
-                    ydl_opts.pop('cookiefile', None)
+                    if attempt > 2:
+                        ydl_opts.pop('cookiefile', None)
                     ydl_opts['extractor_args'] = {
                         'youtube': {
                             'player_client': ['android', 'ios']

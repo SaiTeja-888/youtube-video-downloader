@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: postlink-api
+    env: docker
+    plan: free
+    dockerfilePath: ./docker/backend.Dockerfile
+    healthCheckPath: /api/health
+    disk:
+      name: postlink-downloads
+      mountPath: /var/data/downloads
+      sizeGB: 1
+    envVars:
+      - key: PROJECT_NAME
+        value: POSTLINK media downloader API
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DOWNLOAD_DIR
+        value: /var/data/downloads
+      - key: BACKEND_CORS_ORIGINS
+        value: http://localhost:3000,https://your-frontend-domain.vercel.app
+      - key: BACKEND_CORS_ORIGIN_REGEX
+        value: https://.*\.vercel\.app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: postlink-db
+          property: connectionString
+
+databases:
+  - name: postlink-db
+    plan: free
+    databaseName: postlink
+    user: postlink

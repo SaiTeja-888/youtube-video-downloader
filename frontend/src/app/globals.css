@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  --background: #061113;
+  --foreground: #f7fbfc;
+  --muted: #9fb5ba;
+  --card: rgba(12, 28, 31, 0.54);
+  --card-strong: rgba(8, 21, 24, 0.78);
+  --border: rgba(255, 255, 255, 0.16);
+  --orange: #ff8a2a;
+  --orange-soft: rgba(255, 138, 42, 0.18);
+  --cyan: #18d8ff;
+  --cyan-soft: rgba(24, 216, 255, 0.16);
+}
+
+body {
+  background:
+    linear-gradient(125deg, rgba(255, 138, 42, 0.18), transparent 28%),
+    linear-gradient(235deg, rgba(24, 216, 255, 0.2), transparent 32%),
+    linear-gradient(180deg, #061113 0%, #0c1d20 48%, #071113 100%);
+  color: var(--foreground);
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Glassmorphism card utilities */
+.glass-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05)),
+    var(--card);
+  backdrop-filter: blur(28px) saturate(155%);
+  -webkit-backdrop-filter: blur(28px) saturate(155%);
+  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+/* Custom animated gradient mesh background */
+.bg-mesh-animation {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+}
+
+.bg-mesh-circle-1 {
+  display: none;
+}
+
+.bg-mesh-circle-2 {
+  display: none;
+}
+
+@keyframes floatCircle1 {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  50% {
+    transform: translate(100px, 80px) scale(1.1);
+  }
+
+  100% {
+    transform: translate(-50px, 150px) scale(0.95);
+  }
+}
+
+@keyframes floatCircle2 {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  50% {
+    transform: translate(-120px, -60px) scale(0.9);
+  }
+
+  100% {
+    transform: translate(80px, -140px) scale(1.15);
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(24, 216, 255, 0.28);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--orange);
+}
+
+/* Custom card shadow adjustments */
+.glow-card {
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.glow-card:hover {
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.34),
+    0 0 34px rgba(24, 216, 255, 0.12),
+    0 0 30px rgba(255, 138, 42, 0.1);
+}
+
+.glass-button {
+  background:
+    linear-gradient(135deg, rgba(255, 138, 42, 0.92), rgba(24, 216, 255, 0.86)),
+    rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    0 12px 36px rgba(24, 216, 255, 0.16),
+    0 12px 36px rgba(255, 138, 42, 0.14);
+}
+
+.glass-button:hover {
+  filter: brightness(1.08) saturate(1.08);
+}
+
+.glass-chip {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.glass-input {
+  background: rgba(3, 13, 16, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.glass-input:focus {
+  border-color: rgba(24, 216, 255, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(24, 216, 255, 0.22),
+    0 0 30px rgba(255, 138, 42, 0.1);
+}
+
+/* Progress bar animations */
+@keyframes progress-indeterminate {
+  0% {
+    width: 15%;
+    margin-left: -15%;
+  }
+
+  50% {
+    width: 40%;
+  }
+
+  100% {
+    width: 15%;
+    margin-left: 100%;
+  }
+}
+
+.animate-progress-indeterminate {
+  animation: progress-indeterminate 1.8s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+}

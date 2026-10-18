@@ -1,0 +1,117 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: media_downloader_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: downloader
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: media_downloader_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: media_downloader_mq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: media_downloader_backend
+    restart: always
+    environment:
+      - POSTGRES_SERVER=db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOWNLOAD_DIR=/downloads
+    volumes:
+      - shared_downloads:/downloads
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: media_downloader_worker
+    command: celery -A app.celery_app.celery_app worker --loglevel=info
+    restart: always
+    environment:
+      - POSTGRES_SERVER=db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOWNLOAD_DIR=/downloads
+    volumes:
+      - shared_downloads:/downloads
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: media_downloader_beat
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
+    restart: always
+    environment:
+      - POSTGRES_SERVER=db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DOWNLOAD_DIR=/downloads
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    container_name: media_downloader_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost/api
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: media_downloader_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - shared_downloads:/downloads
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
+  shared_downloads:

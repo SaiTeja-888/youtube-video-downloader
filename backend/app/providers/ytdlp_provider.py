@@ -67,8 +67,41 @@ class YtdlpProvider(BaseProvider):
             pass
         return False, '', ''
 
-    def _cookies_file(self) -> str:
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
+    def _cookies_file(self) -> str | None:
+        # 1. Check raw cookie text from environment variable (ideal for Render env vars)
+        raw_cookies = os.environ.get("COOKIES_TEXT") or os.environ.get("YOUTUBE_COOKIES")
+        if raw_cookies and raw_cookies.strip():
+            auto_path = os.path.join(settings.DOWNLOAD_DIR, "auto_cookies.txt")
+            try:
+                with open(auto_path, "w", encoding="utf-8") as f:
+                    f.write(raw_cookies.strip())
+                return auto_path
+            except Exception:
+                pass
+
+        # 2. Check explicit env path
+        env_path = os.environ.get("COOKIE_FILE") or os.environ.get("COOKIES_FILE")
+        if env_path and os.path.exists(env_path):
+            return env_path
+
+        # 3. Check Render Secret Files default mount path
+        render_secret = "/etc/secrets/cookies.txt"
+        if os.path.exists(render_secret):
+            return render_secret
+
+        # 4. Check local backend directory
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        local_cookie = os.path.join(backend_dir, "cookies.txt")
+        if os.path.exists(local_cookie):
+            return local_cookie
+
+        # 5. Check project root directory
+        root_dir = os.path.dirname(backend_dir)
+        root_cookie = os.path.join(root_dir, "cookies.txt")
+        if os.path.exists(root_cookie):
+            return root_cookie
+
+        return None
 
     def _get_ffmpeg_path(self) -> str | None:
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -98,7 +131,7 @@ class YtdlpProvider(BaseProvider):
             return "firefox"
         return None
 
-    def _base_ydl_opts(self) -> dict:
+    def _base_ydl_opts(self, platform: str = "") -> dict:
         opts = {
             'quiet': True,
             'no_warnings': True,
@@ -120,8 +153,17 @@ class YtdlpProvider(BaseProvider):
         if shutil.which("node"):
             opts['js_runtimes'] = {'node': {}}
 
+        # For YouTube, bypass datacenter HTML webpage bot checks by default
+        if platform == "youtube":
+            opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['web', 'mweb', 'android', 'ios'],
+                    'player_skip': ['webpage', 'configs']
+                }
+            }
+
         cookie_file = self._cookies_file()
-        if os.path.exists(cookie_file):
+        if cookie_file and os.path.exists(cookie_file):
             opts['cookiefile'] = cookie_file
         else:
             browser = self._get_browser_for_cookies()
@@ -165,7 +207,7 @@ class YtdlpProvider(BaseProvider):
                 formats=formats
             )
 
-        ydl_opts = self._base_ydl_opts()
+        ydl_opts = self._base_ydl_opts(platform=platform)
         if platform == "instagram":
             ydl_opts['noplaylist'] = False
         info = None
@@ -180,7 +222,12 @@ class YtdlpProvider(BaseProvider):
                     fallback_opts = dict(ydl_opts)
                     fallback_opts.pop('cookiesfrombrowser', None)
                     fallback_opts.pop('cookiefile', None)
-                    fallback_opts['extractor_args'] = {'youtube': {'player_client': ['android', 'ios']}}
+                    fallback_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['android', 'ios'],
+                            'player_skip': ['webpage', 'configs']
+                        }
+                    }
                     with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
                         info = ydl_fb.extract_info(url, download=False)
                 except Exception:
@@ -476,7 +523,7 @@ class YtdlpProvider(BaseProvider):
                 progress_callback(99.5)  # merging / post-processing may still happen
 
         # Build options with speed optimizations
-        ydl_opts = self._base_ydl_opts()
+        ydl_opts = self._base_ydl_opts(platform=platform)
         ydl_opts.update({
             'format': format_id,
             'merge_output_format': 'mp4',
@@ -549,7 +596,12 @@ class YtdlpProvider(BaseProvider):
                 elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429"]):
                     ydl_opts.pop('cookiesfrombrowser', None)
                     ydl_opts.pop('cookiefile', None)
-                    ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android', 'ios']}}
+                    ydl_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': ['android', 'ios'],
+                            'player_skip': ['webpage', 'configs']
+                        }
+                    }
                     if self._ffmpeg_available():
                         ydl_opts['format'] = "bestvideo+bestaudio/best"
                     else:

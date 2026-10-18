@@ -21,6 +21,22 @@ services:
         fromDatabase:
           name: postlink-db
           property: connectionString
+      # --- YouTube / Instagram Bot-bypass configuration ---
+      # Option A (Recommended): Paste your Netscape-format cookies from a logged-in
+      # YouTube/Instagram session. Export with: yt-dlp --cookies-from-browser chrome --print-to-file cookies.txt ""
+      # Then set the contents as a Render Secret File at /etc/secrets/cookies.txt
+      # OR paste the raw text in the COOKIES_TEXT env var below.
+      # - key: COOKIES_TEXT
+      #   value: "<paste Netscape cookie file contents here>"
+      #
+      # Option B: YouTube PO Token (optional but recommended for server IPs)
+      # Generate at: https://github.com/YunzheZJU/youtube-po-token-generator
+      # - key: PO_TOKEN
+      #   value: "<your-po-token>"
+      # - key: VISITOR_DATA
+      #   value: "<your-visitor-data>"
+      #
+      # DO NOT set COOKIES_FROM_BROWSER on Render — there is no browser on the server.
 
 databases:
   - name: postlink-db

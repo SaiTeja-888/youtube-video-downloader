@@ -16,7 +16,8 @@ WORKDIR /app
 
 # Install Python requirements
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt && \
+    pip install --no-cache-dir --upgrade yt-dlp
 
 # Copy backend codebase
 COPY backend/ /app/

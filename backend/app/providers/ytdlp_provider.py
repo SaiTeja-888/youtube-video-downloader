@@ -164,14 +164,63 @@ class YtdlpProvider(BaseProvider):
     def _ffmpeg_available(self) -> bool:
         return self._get_ffmpeg_path() is not None
 
+    def _is_server_environment(self) -> bool:
+        """Detect if we're running in a headless server (Render, Vercel, Docker, etc.)."""
+        # Common server environment indicators
+        if os.environ.get("RENDER") or os.environ.get("RENDER_SERVICE_ID"):
+            return True
+        if os.environ.get("DYNO"):  # Heroku
+            return True
+        if os.environ.get("KUBERNETES_SERVICE_HOST"):
+            return True
+        # If no DISPLAY and no APPDATA (no desktop environment)
+        if not os.environ.get("DISPLAY") and not os.environ.get("APPDATA"):
+            return True
+        return False
+
     def _get_browser_for_cookies(self) -> str | None:
+        # Never try to extract browser cookies in a server environment — there's no browser
+        if self._is_server_environment():
+            return None
         if settings.COOKIES_FROM_BROWSER:
             return settings.COOKIES_FROM_BROWSER
-        # Auto-detect available browsers on Windows/Linux/Mac
+        # Auto-detect available browsers on Windows/Linux/Mac (local dev only)
         appdata = os.environ.get("APPDATA", "")
         if appdata and os.path.exists(os.path.join(appdata, "Mozilla", "Firefox", "Profiles")):
             return "firefox"
         return None
+
+    def _get_youtube_extractor_args(self, include_po_token: bool = True) -> dict:
+        """
+        Build YouTube extractor_args.
+        Uses server-safe clients (tv_embedded, mweb) that don't require login
+        and optionally injects a PO Token for enhanced access.
+
+        Set the following env vars on Render:
+          PO_TOKEN        - YouTube Proof of Origin token (optional but recommended)
+          VISITOR_DATA    - Visitor data string paired with PO_TOKEN (optional)
+        """
+        # tv_embedded and mweb are the most reliable server-side clients
+        # They bypass age-gate and bot detection without needing cookies
+        player_clients = ['tv_embedded', 'mweb', 'android', 'ios']
+
+        extractor_args: dict = {
+            'youtube': {
+                'player_client': player_clients,
+                # Skip dash manifest fetching to avoid extra auth challenges
+                'skip': ['dash', 'hls'] if False else [],
+            }
+        }
+
+        # Inject PO Token if provided (dramatically reduces bot blocks on server IPs)
+        po_token = os.environ.get("PO_TOKEN", "").strip()
+        visitor_data = os.environ.get("VISITOR_DATA", "").strip()
+        if include_po_token and po_token:
+            extractor_args['youtube']['po_token'] = [f'mweb+{po_token}']
+            if visitor_data:
+                extractor_args['youtube']['visitor_data'] = visitor_data
+
+        return extractor_args
 
     def _base_ydl_opts(self, platform: str = "") -> dict:
         opts = {
@@ -182,9 +231,10 @@ class YtdlpProvider(BaseProvider):
             'noplaylist': True,
             'nocheckcertificate': True,
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Forwarded-For': '',  # Don't spoof IP — some extractors reject it
             }
         }
 
@@ -195,18 +245,16 @@ class YtdlpProvider(BaseProvider):
         if shutil.which("node"):
             opts['js_runtimes'] = {'node': {}}
 
-        # For YouTube, prioritize mobile clients (android, ios) to avoid bot detection and missing player response
+        # YouTube-specific: use server-safe clients + PO Token
         if platform == "youtube":
-            opts['extractor_args'] = {
-                'youtube': {
-                    'player_client': ['android', 'ios', 'web']
-                }
-            }
+            opts['extractor_args'] = self._get_youtube_extractor_args()
 
+        # Cookie file takes priority over browser extraction
         cookie_file = self._cookies_file()
         if cookie_file and os.path.exists(cookie_file):
             opts['cookiefile'] = cookie_file
         else:
+            # Only try browser cookies in local (non-server) environments
             browser = self._get_browser_for_cookies()
             if browser:
                 opts['cookiesfrombrowser'] = (browser,)
@@ -258,28 +306,35 @@ class YtdlpProvider(BaseProvider):
         except Exception as exc:
             err_lower = str(exc).lower()
             # If cookie lock, bot detection, or player response error occurred, try fallback clients
-            if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429", "player response", "requested format", "unable to download"]):
-                # Try fallbacks: first preserving valid cookies, then without
+            if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429", "player response", "requested format", "unable to download", "blocked", "confirm your age"]):
+                # Progressively try server-safe client combinations
+                # tv_embedded and mweb work best on server IPs without cookies
+                fallback_sequences = [
+                    ['tv_embedded', 'mweb'],
+                    ['tv_embedded'],
+                    ['mweb'],
+                    ['android', 'tv_embedded'],
+                    ['android'],
+                    ['ios'],
+                ]
                 cookie_tries = [True, False] if ydl_opts.get('cookiefile') else [False]
                 for use_cookie in cookie_tries:
-                    for fb_clients in [['android'], ['android', 'ios'], ['tv']]:
+                    for fb_clients in fallback_sequences:
                         try:
                             fallback_opts = dict(ydl_opts)
                             fallback_opts.pop('cookiesfrombrowser', None)
                             if not use_cookie:
                                 fallback_opts.pop('cookiefile', None)
-                            fallback_opts['extractor_args'] = {
-                                'youtube': {
-                                    'player_client': fb_clients
-                                }
-                            }
+                            fallback_opts['extractor_args'] = self._get_youtube_extractor_args()
+                            # Override the player_client for this specific fallback
+                            fallback_opts['extractor_args']['youtube']['player_client'] = fb_clients
                             with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
                                 info = ydl_fb.extract_info(url, download=False)
-                                if info and info.get('formats'):
+                                if info and (info.get('formats') or info.get('url')):
                                     break
                         except Exception:
                             continue
-                    if info and info.get('formats'):
+                    if info and (info.get('formats') or info.get('url')):
                         break
             if not info:
                 # Fallback to check if URL content is directly accessible as a media file
@@ -641,16 +696,20 @@ class YtdlpProvider(BaseProvider):
                         ydl_opts['format'] = "bestvideo+bestaudio/best"
                     else:
                         ydl_opts['format'] = "best"
-                # If YouTube bot/cookie/player response error happened, switch to android client for next attempt
-                elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429", "player response", "unable to download"]):
+                # If YouTube bot/cookie/player response error happened, switch to server-safe clients for next attempt
+                elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429", "player response", "unable to download", "blocked", "confirm your age"]):
                     ydl_opts.pop('cookiesfrombrowser', None)
                     if attempt > 2:
                         ydl_opts.pop('cookiefile', None)
-                    ydl_opts['extractor_args'] = {
-                        'youtube': {
-                            'player_client': ['android', 'ios']
-                        }
-                    }
+                    # Rotate through server-safe client combos on each retry
+                    server_safe_clients = [
+                        ['tv_embedded', 'mweb'],
+                        ['tv_embedded'],
+                        ['android', 'tv_embedded'],
+                    ]
+                    fb_clients = server_safe_clients[(attempt - 1) % len(server_safe_clients)]
+                    ydl_opts['extractor_args'] = self._get_youtube_extractor_args()
+                    ydl_opts['extractor_args']['youtube']['player_client'] = fb_clients
                     if self._ffmpeg_available():
                         ydl_opts['format'] = "bestvideo+bestaudio/best"
                     else:

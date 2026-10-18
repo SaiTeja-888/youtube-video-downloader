@@ -36,6 +36,10 @@ services:
       # - key: VISITOR_DATA
       #   value: "<your-visitor-data>"
       #
+      # Option C: Proxy (Optional - routes YouTube requests through a proxy instead of Render's AWS IP)
+      # - key: HTTP_PROXY
+      #   value: "http://user:password@proxy-host:port"
+      #
       # DO NOT set COOKIES_FROM_BROWSER on Render — there is no browser on the server.
 
 databases:

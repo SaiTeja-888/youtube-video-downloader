@@ -279,10 +279,14 @@ def get_status(job_id: str, db: Session = Depends(get_db)):
         res.progress = progress_info["progress"]
         res.error = progress_info["error"]
 
-    if res.status == "completed" and job.file_path:
-        filename = os.path.basename(job.file_path)
-        # Use the forced-download endpoint instead of static files (prevents browser playback)
-        res.file_url = f"/api/download-file/{job.id}"
+    if res.status == "completed":
+        if not job.file_path:
+            try:
+                db.refresh(job)
+            except Exception:
+                pass
+        if job.file_path:
+            res.file_url = f"/api/download-file/{job.id}"
 
     return res
 

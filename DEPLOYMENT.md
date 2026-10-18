@@ -114,12 +114,52 @@ This runs frontend, backend, Postgres, Redis, RabbitMQ, NGINX, and workers toget
 
 ## Important Production Notes
 
-- Public YouTube/Instagram media works when the platform allows anonymous extraction.
-- Private, age-restricted, bot-protected, or login-gated media may require cookies on a trusted private deployment.
+- Public Instagram media works out-of-the-box using the built-in `InstagramProvider` without cookies.
 - Downloads are stored temporarily. The backend cleanup task removes old files.
 - For serious public traffic, add Redis and RabbitMQ instead of relying on local fallback mode.
 - Keep `SECRET_KEY` private.
 - Do not commit `.env`, database files, local logs, `downloads/`, `backend/venv/`, or `frontend/.next/`.
+
+## Why YouTube Blocks Render Requests & How To Bypass It
+
+### Why YouTube Blocks Cloud Hosts (Render, AWS, DigitalOcean)
+Render runs on AWS datacenter IP ranges. Google/YouTube actively flags requests coming from cloud hosting IPs with:
+- `Sign in to confirm you're not a bot`
+- `HTTP 429 Too Many Requests`
+- `Video unavailable`
+
+Because bots scrape heavily from cloud servers, YouTube requires an authenticated session (cookies), Proof-of-Origin (`po_token`), or residential IP routing.
+
+### 3 Ways To Bypass YouTube Blocks On Render
+
+#### Method 1: Add Cookies (Recommended — 100% Reliable)
+Passing your browser's YouTube session cookies tells YouTube you are a real logged-in user:
+
+1. In your browser (Chrome or Firefox), install an extension like **Get cookies.txt LOCALLY**.
+2. Go to `https://www.youtube.com/` while logged into any Google account (a secondary/alt account is fine).
+3. Open the extension and click **Export / Copy** to get your cookies in Netscape format.
+4. On your **Render Dashboard** -> Go to your `postlink-api` service -> **Environment**:
+   - **Option A (Secret File)**: Under **Secret Files**, add a file named `/etc/secrets/cookies.txt` and paste the cookie content.
+   - **Option B (Env Variable)**: Add an environment variable `COOKIES_TEXT` and paste the cookie content directly.
+5. Deploy or restart the Render service.
+
+#### Method 2: Use a Residential / Web Proxy (Zero Cookie Maintenance)
+If you do not want to manage cookies, route Render's yt-dlp traffic through a proxy:
+
+1. Get a proxy (e.g. from Webshare, IPRoyal, or any HTTP/SOCKS5 proxy provider).
+2. On your **Render Dashboard** -> `postlink-api` -> **Environment**:
+   - Add environment variable `HTTP_PROXY` or `YTDL_PROXY`:
+     ```text
+     http://username:password@proxy-host:port
+     ```
+3. The backend automatically routes YouTube requests through the proxy IP instead of Render's AWS IP.
+
+#### Method 3: PO Token (Proof of Origin)
+If using the Web client without cookies:
+1. Generate a PO Token using [youtube-po-token-generator](https://github.com/YunzheZJU/youtube-po-token-generator).
+2. On Render Dashboard, set:
+   - `PO_TOKEN=<your_po_token>`
+   - `VISITOR_DATA=<your_visitor_data>`
 
 ## Quick Local Check
 

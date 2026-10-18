@@ -11,22 +11,15 @@ from app.url_utils import hostname_for_url, normalize_media_url
 
 # Public Invidious instances (open-source YouTube frontends with their own IPs)
 # If one is down the next is tried automatically — no config needed
-# Source: https://api.invidious.io/instances.json (sorted by health)
 _INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://invidious.tiekoetter.com",
+    "https://invidious.f5.si",
+    "https://yt.chocolatemoo53.com",
     "https://yewtu.be",
-    "https://inv.riverside.rocks",
-    "https://invidious.flokinet.to",
+    "https://invidious.nerdvpn.de",
     "https://invidious.privacydev.net",
-    "https://iv.melmac.space",
-    "https://invidious.lunar.icu",
-    "https://yt.artemislena.eu",
-    "https://invidious.perennialte.ch",
-    "https://invidious.drgns.space",
-    "https://inv.in.projectsegfau.lt",
-    "https://invidious.namazso.eu",
     "https://invidious.io",
-    "https://y.com.sb",
-    "https://iv.ggtyler.dev",
 ]
 
 # Public Piped API instances (another open-source YouTube proxy)
@@ -296,6 +289,10 @@ class YtdlpProvider(BaseProvider):
             browser = self._get_browser_for_cookies()
             if browser:
                 opts['cookiesfrombrowser'] = (browser,)
+
+        proxy = os.environ.get("YTDL_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+        if proxy and proxy.strip():
+            opts['proxy'] = proxy.strip()
 
         return opts
 
@@ -842,7 +839,7 @@ class YtdlpProvider(BaseProvider):
                 raise e
 
         # Normalize format_id to prevent "Requested format is not available"
-        if format_id.startswith("best[ext=mp4][vcodec!=none]") or format_id == "best":
+        if (format_id.startswith("best[ext=mp4][vcodec!=none]") or format_id == "best") and platform == "youtube":
             if self._ffmpeg_available():
                 format_id = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
             else:

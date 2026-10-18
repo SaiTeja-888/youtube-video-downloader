@@ -1,12 +1,12 @@
 from app.providers.base import BaseProvider
+from app.providers.instagram_provider import InstagramProvider
 from app.providers.ytdlp_provider import YtdlpProvider
 
 class ProviderManager:
     def __init__(self):
-        # In a highly modular design, we could load distinct platform modules here.
-        # Since YtdlpProvider wraps yt-dlp which is a generic extractor, it acts as a
-        # unified engine, but we register it and can easily extend this list.
+        # Dedicated platform providers take priority, falling back to YtdlpProvider
         self.providers = [
+            InstagramProvider(),
             YtdlpProvider()
         ]
 
@@ -16,6 +16,6 @@ class ProviderManager:
                 return provider
         
         # Fallback to the generic YtdlpProvider
-        return self.providers[0]
+        return self.providers[-1]
 
 provider_manager = ProviderManager()

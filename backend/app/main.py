@@ -148,20 +148,28 @@ def analyze_url(request: Request, payload: AnalyzeRequest):
         err_msg = str(e)
         err_msg_lower = err_msg.lower()
         if "could not copy chrome cookie database" in err_msg_lower:
-            detail = "YouTube bot protection active. Your Chrome cookie file is currently locked by the browser. Please close Chrome and try again, or configure Edge cookies in your environment (COOKIES_FROM_BROWSER=edge)."
-        elif "sign in to confirm" in err_msg_lower or "not a bot" in err_msg_lower or "login required" in err_msg_lower:
-            detail = "The platform blocked this request or requires login. For YouTube or Instagram private/login-gated media, configure browser cookies in your environment (e.g., COOKIES_FROM_BROWSER=chrome)."
+            detail = "YouTube bot protection active. Please try again in a moment."
+        elif any(k in err_msg_lower for k in ["sign in to confirm", "not a bot", "login required",
+                                               "confirm your age", "age-restricted", "private video",
+                                               "members only", "join this channel"]):
+            detail = (
+                "This video is private, age-restricted, or members-only and cannot be accessed. "
+                "Only publicly available videos are supported."
+            )
         elif "drm protected" in err_msg_lower:
-            detail = "This media file is DRM protected (Digital Rights Management) and cannot be legally extracted."
-        elif "nonetype" in err_msg_lower or "no data" in err_msg_lower:
-            detail = "Failed to extract video information. The video may be unavailable, age-restricted, members-only, or region-locked. Please try again."
+            detail = "This media file is DRM protected and cannot be downloaded."
+        elif any(k in err_msg_lower for k in ["nonetype", "no data", "unable to extract"]):
+            detail = "Failed to extract video information. The video may be unavailable or region-locked. Please try again."
+        elif "blocked" in err_msg_lower or "429" in err_msg_lower:
+            detail = "YouTube rate-limited this request. Please wait 30 seconds and try again."
         else:
-            detail = f"Error parsing link: {err_msg}"
-        
+            detail = f"Extraction Error: {err_msg}"
+
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=detail
         )
+
 
 @app.post("/download")
 @app.post("/api/download")

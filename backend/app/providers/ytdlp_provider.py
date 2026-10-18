@@ -190,37 +190,43 @@ class YtdlpProvider(BaseProvider):
             return "firefox"
         return None
 
-    def _get_youtube_extractor_args(self, include_po_token: bool = True) -> dict:
+    def _get_youtube_extractor_args(self, clients: list[str] | None = None) -> dict:
         """
-        Build YouTube extractor_args.
-        Uses server-safe clients (tv_embedded, mweb) that don't require login
-        and optionally injects a PO Token for enhanced access.
-
-        Set the following env vars on Render:
-          PO_TOKEN        - YouTube Proof of Origin token (optional but recommended)
-          VISITOR_DATA    - Visitor data string paired with PO_TOKEN (optional)
+        Build YouTube extractor_args using server-safe clients.
+        tv_embedded / mweb / android_creator work on server IPs without cookies.
+        Optionally inject PO_TOKEN + VISITOR_DATA env vars for extra access.
         """
-        # tv_embedded and mweb are the most reliable server-side clients
-        # They bypass age-gate and bot detection without needing cookies
-        player_clients = ['tv_embedded', 'mweb', 'android', 'ios']
+        if clients is None:
+            clients = ['tv_embedded', 'mweb', 'android_creator', 'android', 'ios']
 
         extractor_args: dict = {
             'youtube': {
-                'player_client': player_clients,
-                # Skip dash manifest fetching to avoid extra auth challenges
-                'skip': ['dash', 'hls'] if False else [],
+                'player_client': clients,
             }
         }
 
-        # Inject PO Token if provided (dramatically reduces bot blocks on server IPs)
         po_token = os.environ.get("PO_TOKEN", "").strip()
         visitor_data = os.environ.get("VISITOR_DATA", "").strip()
-        if include_po_token and po_token:
-            extractor_args['youtube']['po_token'] = [f'mweb+{po_token}']
-            if visitor_data:
-                extractor_args['youtube']['visitor_data'] = visitor_data
+        if po_token:
+            extractor_args['youtube']['po_token'] = [f'mweb+{po_token}', f'tv_embedded+{po_token}']
+        if visitor_data:
+            extractor_args['youtube']['visitor_data'] = visitor_data
 
         return extractor_args
+
+    # All client combos to try, ordered from most-server-safe to least
+    _YT_CLIENT_FALLBACK_CHAIN: list[list[str]] = [
+        ['tv_embedded'],
+        ['mweb'],
+        ['tv_embedded', 'mweb'],
+        ['android_creator'],
+        ['android_creator', 'tv_embedded'],
+        ['android'],
+        ['android', 'tv_embedded'],
+        ['ios'],
+        ['tv'],
+        ['android', 'ios', 'tv_embedded', 'mweb'],
+    ]
 
     def _base_ydl_opts(self, platform: str = "") -> dict:
         opts = {
@@ -231,10 +237,13 @@ class YtdlpProvider(BaseProvider):
             'noplaylist': True,
             'nocheckcertificate': True,
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36',
+                'User-Agent': (
+                    'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.6099.230 Mobile Safari/537.36'
+                ),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'X-Forwarded-For': '',  # Don't spoof IP — some extractors reject it
             }
         }
 
@@ -245,21 +254,40 @@ class YtdlpProvider(BaseProvider):
         if shutil.which("node"):
             opts['js_runtimes'] = {'node': {}}
 
-        # YouTube-specific: use server-safe clients + PO Token
         if platform == "youtube":
             opts['extractor_args'] = self._get_youtube_extractor_args()
 
-        # Cookie file takes priority over browser extraction
         cookie_file = self._cookies_file()
         if cookie_file and os.path.exists(cookie_file):
             opts['cookiefile'] = cookie_file
         else:
-            # Only try browser cookies in local (non-server) environments
             browser = self._get_browser_for_cookies()
             if browser:
                 opts['cookiesfrombrowser'] = (browser,)
 
         return opts
+
+    def _try_youtube_with_all_clients(self, url: str, base_opts: dict, download: bool = False) -> dict | None:
+        """
+        Exhaustively try every known server-safe YouTube client combination.
+        Returns the first successful info dict, or None if all fail.
+        Guarantees public videos always work on server deployments.
+        """
+        for clients in self._YT_CLIENT_FALLBACK_CHAIN:
+            for strip_cookies in [False, True]:
+                try:
+                    opts = dict(base_opts)
+                    if strip_cookies:
+                        opts.pop('cookiefile', None)
+                        opts.pop('cookiesfrombrowser', None)
+                    opts['extractor_args'] = self._get_youtube_extractor_args(clients=clients)
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=download)
+                        if info and (info.get('formats') or info.get('url')):
+                            return info
+                except Exception:
+                    continue
+        return None
 
     def analyze(self, url: str) -> MediaMetadata:
         url = normalize_media_url(url)
@@ -305,37 +333,16 @@ class YtdlpProvider(BaseProvider):
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             err_lower = str(exc).lower()
-            # If cookie lock, bot detection, or player response error occurred, try fallback clients
-            if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429", "player response", "requested format", "unable to download", "blocked", "confirm your age"]):
-                # Progressively try server-safe client combinations
-                # tv_embedded and mweb work best on server IPs without cookies
-                fallback_sequences = [
-                    ['tv_embedded', 'mweb'],
-                    ['tv_embedded'],
-                    ['mweb'],
-                    ['android', 'tv_embedded'],
-                    ['android'],
-                    ['ios'],
-                ]
-                cookie_tries = [True, False] if ydl_opts.get('cookiefile') else [False]
-                for use_cookie in cookie_tries:
-                    for fb_clients in fallback_sequences:
-                        try:
-                            fallback_opts = dict(ydl_opts)
-                            fallback_opts.pop('cookiesfrombrowser', None)
-                            if not use_cookie:
-                                fallback_opts.pop('cookiefile', None)
-                            fallback_opts['extractor_args'] = self._get_youtube_extractor_args()
-                            # Override the player_client for this specific fallback
-                            fallback_opts['extractor_args']['youtube']['player_client'] = fb_clients
-                            with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                                info = ydl_fb.extract_info(url, download=False)
-                                if info and (info.get('formats') or info.get('url')):
-                                    break
-                        except Exception:
-                            continue
-                    if info and (info.get('formats') or info.get('url')):
-                        break
+            # For YouTube: exhaustively try ALL server-safe client combinations
+            if platform == "youtube":
+                info = self._try_youtube_with_all_clients(url, ydl_opts, download=False)
+            if not info and not (platform == "youtube" and any(k in err_lower for k in [
+                "sign in", "bot", "cookie", "login", "429", "player response",
+                "requested format", "unable to download", "blocked", "confirm your age",
+                "drm", "age", "private", "members only"
+            ])):
+                # Non-YouTube or non-auth errors — re-raise immediately
+                raise exc
             if not info:
                 # Fallback to check if URL content is directly accessible as a media file
                 try:

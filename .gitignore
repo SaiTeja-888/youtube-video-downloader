@@ -26,6 +26,7 @@ yarn-error.log*
 downloads/
 *.part
 *.exe
+*cookies.txt
 
 # OS / editor
 .DS_Store

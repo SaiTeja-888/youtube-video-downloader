@@ -5,6 +5,7 @@ services:
     plan: free
     dockerfilePath: ./docker/backend.Dockerfile
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: PROJECT_NAME
         value: POSTLINK media downloader API

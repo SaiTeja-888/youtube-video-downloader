@@ -11,14 +11,21 @@ from app.url_utils import hostname_for_url, normalize_media_url
 
 # Public Invidious instances (open-source YouTube frontends with their own IPs)
 # If one is down the next is tried automatically — no config needed
+# Source: https://api.invidious.io/instances.json (sorted by health)
 _INVIDIOUS_INSTANCES = [
-    "https://invidious.io",
     "https://yewtu.be",
     "https://inv.riverside.rocks",
-    "https://y.com.sb",
     "https://invidious.flokinet.to",
+    "https://invidious.privacydev.net",
+    "https://iv.melmac.space",
+    "https://invidious.lunar.icu",
     "https://yt.artemislena.eu",
+    "https://invidious.perennialte.ch",
+    "https://invidious.drgns.space",
+    "https://inv.in.projectsegfau.lt",
     "https://invidious.namazso.eu",
+    "https://invidious.io",
+    "https://y.com.sb",
     "https://iv.ggtyler.dev",
 ]
 
@@ -28,6 +35,9 @@ _PIPED_INSTANCES = [
     "https://pipedapi.adminforge.de",
     "https://pipedapi.tokhmi.xyz",
     "https://watchapi.whatever.social",
+    "https://api.piped.projectsegfau.lt",
+    "https://piped-api.garudalinux.org",
+    "https://pipedapi.in.projectsegfau.lt",
 ]
 
 class YtdlpProvider(BaseProvider):
@@ -334,9 +344,14 @@ class YtdlpProvider(BaseProvider):
         These instances have non-datacenter IPs that YouTube doesn't block.
         Works for ALL public YouTube videos with zero configuration.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         video_id = self._extract_youtube_video_id(url)
         if not video_id:
             return None
+
+        logger.info(f"[Invidious] Trying fallback for video_id={video_id}")
 
         for instance in _INVIDIOUS_INSTANCES:
             try:
@@ -346,6 +361,7 @@ class YtdlpProvider(BaseProvider):
                     headers={'User-Agent': 'Mozilla/5.0'}
                 )
                 if resp.status_code != 200:
+                    logger.warning(f"[Invidious] {instance} returned HTTP {resp.status_code}")
                     continue
                 data = resp.json()
                 if 'error' in data or not data.get('title'):
@@ -412,6 +428,7 @@ class YtdlpProvider(BaseProvider):
                         )
                         break
 
+                logger.info(f"[Invidious] SUCCESS via {instance} — {len(formats)} formats found")
                 return MediaMetadata(
                     url=url,
                     title=data.get('title', 'Unknown Title'),
@@ -424,9 +441,11 @@ class YtdlpProvider(BaseProvider):
                     platform='youtube',
                     formats=formats,
                 )
-            except Exception:
+            except Exception as ex:
+                logger.warning(f"[Invidious] {instance} error: {ex}")
                 continue
 
+        logger.warning(f"[Invidious] All instances failed for video_id={video_id}, trying Piped...")
         # Try Piped as final fallback
         return self._try_piped_analyze(url)
 

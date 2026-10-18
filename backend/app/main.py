@@ -147,23 +147,34 @@ def analyze_url(request: Request, payload: AnalyzeRequest):
         logger.debug(f"Traceback for {url}: {traceback.format_exc()}")
         err_msg = str(e)
         err_msg_lower = err_msg.lower()
-        if "could not copy chrome cookie database" in err_msg_lower:
-            detail = "YouTube bot protection active. Please try again in a moment."
-        elif any(k in err_msg_lower for k in ["sign in to confirm", "not a bot", "login required",
-                                               "confirm your age", "age-restricted", "private video",
-                                               "members only", "join this channel"]):
+
+        # Bot-detection / server-IP block — NOT a private video, just a transient block
+        if any(k in err_msg_lower for k in [
+            "sign in to confirm", "confirm you're not a bot", "not a bot",
+            "could not copy chrome cookie database"
+        ]):
             detail = (
-                "This video is private, age-restricted, or members-only and cannot be accessed. "
-                "Only publicly available videos are supported."
+                "YouTube is temporarily blocking requests from this server. "
+                "Please try again in a few seconds — it usually resolves automatically."
+            )
+        # Genuinely private / login-gated / age-restricted
+        elif any(k in err_msg_lower for k in [
+            "private video", "members only", "join this channel",
+            "confirm your age", "age-restricted", "login required",
+            "this video is unavailable"
+        ]):
+            detail = (
+                "This video is private, age-restricted, or members-only. "
+                "Only publicly available videos can be downloaded."
             )
         elif "drm protected" in err_msg_lower:
-            detail = "This media file is DRM protected and cannot be downloaded."
-        elif any(k in err_msg_lower for k in ["nonetype", "no data", "unable to extract"]):
-            detail = "Failed to extract video information. The video may be unavailable or region-locked. Please try again."
-        elif "blocked" in err_msg_lower or "429" in err_msg_lower:
+            detail = "This media is DRM-protected and cannot be downloaded."
+        elif "429" in err_msg_lower or "too many requests" in err_msg_lower:
             detail = "YouTube rate-limited this request. Please wait 30 seconds and try again."
+        elif any(k in err_msg_lower for k in ["nonetype", "no data", "unable to extract", "failed to extract"]):
+            detail = "Could not read video information. The video may be unavailable or region-locked. Please try again."
         else:
-            detail = f"Extraction Error: {err_msg}"
+            detail = f"Extraction failed: {err_msg}"
 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

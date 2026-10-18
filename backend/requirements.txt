@@ -4,6 +4,7 @@ celery>=5.3.1
 redis>=4.6.0
 sqlalchemy>=2.0.19
 psycopg2-binary>=2.9.6
+psycopg[binary]>=3.1.10
 pydantic>=2.0.3
 pydantic-settings>=2.0.1
 yt-dlp>=2024.10.0

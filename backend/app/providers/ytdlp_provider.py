@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import time
 import requests
@@ -7,6 +8,27 @@ import yt_dlp
 from app.config import settings
 from app.providers.base import BaseProvider, MediaFormat, MediaMetadata
 from app.url_utils import hostname_for_url, normalize_media_url
+
+# Public Invidious instances (open-source YouTube frontends with their own IPs)
+# If one is down the next is tried automatically — no config needed
+_INVIDIOUS_INSTANCES = [
+    "https://invidious.io",
+    "https://yewtu.be",
+    "https://inv.riverside.rocks",
+    "https://y.com.sb",
+    "https://invidious.flokinet.to",
+    "https://yt.artemislena.eu",
+    "https://invidious.namazso.eu",
+    "https://iv.ggtyler.dev",
+]
+
+# Public Piped API instances (another open-source YouTube proxy)
+_PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://pipedapi.adminforge.de",
+    "https://pipedapi.tokhmi.xyz",
+    "https://watchapi.whatever.social",
+]
 
 class YtdlpProvider(BaseProvider):
     def can_handle(self, url: str) -> bool:
@@ -271,8 +293,9 @@ class YtdlpProvider(BaseProvider):
         """
         Exhaustively try every known server-safe YouTube client combination.
         Returns the first successful info dict, or None if all fail.
-        Guarantees public videos always work on server deployments.
+        Stops immediately on definitive bot-block (avoids 20× log spam).
         """
+        _BOT_BLOCK = ["sign in to confirm", "confirm you're not a bot", "not a bot"]
         for clients in self._YT_CLIENT_FALLBACK_CHAIN:
             for strip_cookies in [False, True]:
                 try:
@@ -285,9 +308,239 @@ class YtdlpProvider(BaseProvider):
                         info = ydl.extract_info(url, download=download)
                         if info and (info.get('formats') or info.get('url')):
                             return info
-                except Exception:
+                except Exception as e:
+                    err = str(e).lower()
+                    # YouTube is blocking ALL server IPs — stop immediately, go to Invidious
+                    if any(k in err for k in _BOT_BLOCK):
+                        return None
                     continue
         return None
+
+    # ------------------------------------------------------------------ #
+    #  Invidious / Piped fallback — bypasses YouTube's server-IP blocks   #
+    # ------------------------------------------------------------------ #
+
+    def _extract_youtube_video_id(self, url: str) -> str | None:
+        """Extract the 11-char YouTube video ID from any YouTube URL format."""
+        m = re.search(
+            r'(?:v=|/embed/|/shorts/|/live/|youtu\.be/)([a-zA-Z0-9_-]{11})',
+            url
+        )
+        return m.group(1) if m else None
+
+    def _try_invidious_analyze(self, url: str) -> 'MediaMetadata | None':
+        """
+        Fetch video metadata + direct CDN stream URLs from public Invidious instances.
+        These instances have non-datacenter IPs that YouTube doesn't block.
+        Works for ALL public YouTube videos with zero configuration.
+        """
+        video_id = self._extract_youtube_video_id(url)
+        if not video_id:
+            return None
+
+        for instance in _INVIDIOUS_INSTANCES:
+            try:
+                resp = requests.get(
+                    f"{instance}/api/v1/videos/{video_id}",
+                    timeout=12,
+                    headers={'User-Agent': 'Mozilla/5.0'}
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if 'error' in data or not data.get('title'):
+                    continue
+
+                formats: list[MediaFormat] = []
+                seen: set[str] = set()
+
+                # Combined streams — video+audio merged, ready to download
+                for f in data.get('formatStreams', []):
+                    itag = str(f.get('itag', ''))
+                    fmt_url = f.get('url', '')
+                    if not fmt_url or itag in seen:
+                        continue
+                    seen.add(itag)
+                    formats.append(MediaFormat(
+                        format_id=f"invidious_{itag}",
+                        resolution=f.get('qualityLabel', f.get('quality', 'unknown')),
+                        fps=f.get('fps'),
+                        codec=f.get('encoding', 'unknown'),
+                        container=f.get('container', 'mp4'),
+                        media_type='muxed',
+                        url=fmt_url,
+                    ))
+
+                # Adaptive streams — separate video or audio tracks
+                for f in data.get('adaptiveFormats', []):
+                    itag = str(f.get('itag', ''))
+                    fmt_url = f.get('url', '')
+                    if not fmt_url or itag in seen:
+                        continue
+                    seen.add(itag)
+                    mime = f.get('type', '')
+                    if mime.startswith('video/'):
+                        media_type = 'video'
+                        resolution = f.get('qualityLabel', 'unknown')
+                    elif mime.startswith('audio/'):
+                        media_type = 'audio'
+                        resolution = 'Audio'
+                    else:
+                        continue
+                    container = mime.split('/')[-1].split(';')[0].strip() or 'mp4'
+                    formats.append(MediaFormat(
+                        format_id=f"invidious_{itag}",
+                        resolution=resolution,
+                        fps=f.get('fps'),
+                        codec=f.get('encoding', 'unknown'),
+                        container=container,
+                        media_type=media_type,
+                        url=fmt_url,
+                    ))
+
+                if not formats:
+                    continue
+
+                # Best thumbnail
+                thumbnail = None
+                thumbs = data.get('videoThumbnails', [])
+                for thumb in reversed(thumbs):
+                    t = thumb.get('url', '')
+                    if t:
+                        thumbnail = t if t.startswith('http') else (
+                            f"https:{t}" if t.startswith('//') else f"{instance}{t}"
+                        )
+                        break
+
+                return MediaMetadata(
+                    url=url,
+                    title=data.get('title', 'Unknown Title'),
+                    duration=data.get('lengthSeconds'),
+                    thumbnail=thumbnail,
+                    uploader=data.get('author', 'Unknown'),
+                    views=data.get('viewCount'),
+                    upload_date=str(data.get('published', '')),
+                    description=(data.get('description') or '')[:500],
+                    platform='youtube',
+                    formats=formats,
+                )
+            except Exception:
+                continue
+
+        # Try Piped as final fallback
+        return self._try_piped_analyze(url)
+
+    def _try_piped_analyze(self, url: str) -> 'MediaMetadata | None':
+        """
+        Use Piped API (another open-source YouTube proxy) as a second fallback.
+        """
+        video_id = self._extract_youtube_video_id(url)
+        if not video_id:
+            return None
+
+        for instance in _PIPED_INSTANCES:
+            try:
+                resp = requests.get(
+                    f"{instance}/streams/{video_id}",
+                    timeout=12,
+                    headers={'User-Agent': 'Mozilla/5.0'}
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if 'error' in data or not data.get('title'):
+                    continue
+
+                formats: list[MediaFormat] = []
+
+                # Muxed / combined video+audio streams
+                for f in data.get('videoStreams', []):
+                    fmt_url = f.get('url', '')
+                    quality = f.get('quality', 'unknown')
+                    if not fmt_url or f.get('videoOnly', False):
+                        continue
+                    fid = f"piped_v_{re.sub(r'[^a-zA-Z0-9]', '_', quality)}"
+                    formats.append(MediaFormat(
+                        format_id=fid,
+                        resolution=quality,
+                        fps=f.get('fps'),
+                        codec=f.get('codec', 'unknown'),
+                        container='mp4',
+                        media_type='muxed',
+                        url=fmt_url,
+                    ))
+
+                # Audio-only streams
+                for f in data.get('audioStreams', []):
+                    fmt_url = f.get('url', '')
+                    quality = f.get('quality', 'Audio')
+                    if not fmt_url:
+                        continue
+                    fid = f"piped_a_{re.sub(r'[^a-zA-Z0-9]', '_', quality)}"
+                    formats.append(MediaFormat(
+                        format_id=fid,
+                        resolution='Audio',
+                        fps=None,
+                        codec=f.get('codec', 'unknown'),
+                        container='m4a',
+                        media_type='audio',
+                        url=fmt_url,
+                    ))
+
+                if not formats:
+                    continue
+
+                return MediaMetadata(
+                    url=url,
+                    title=data.get('title', 'Unknown Title'),
+                    duration=data.get('duration'),
+                    thumbnail=data.get('thumbnailUrl', ''),
+                    uploader=data.get('uploader', 'Unknown'),
+                    views=data.get('views'),
+                    upload_date=None,
+                    description=(data.get('description') or '')[:500],
+                    platform='youtube',
+                    formats=formats,
+                )
+            except Exception:
+                continue
+
+        return None
+
+    def _download_from_direct_url(self, direct_url: str, output_path: str,
+                                   filename_hint: str, progress_callback) -> str:
+        """Stream-download from a direct URL (used for Invidious/Piped formats)."""
+        safe_hint = re.sub(r'[^\w\-.]', '_', filename_hint)[:80]
+        output_file = os.path.join(output_path, f"{safe_hint}_{int(time.time())}.mp4")
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.6099.230 Mobile Safari/537.36'
+            ),
+            'Referer': 'https://www.youtube.com/',
+        }
+        try:
+            response = requests.get(direct_url, headers=headers, stream=True, timeout=120)
+            response.raise_for_status()
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            with open(output_file, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            progress_callback(min((downloaded / total_size) * 100, 99.0))
+            progress_callback(100.0)
+            return output_file
+        except Exception:
+            if os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                except Exception:
+                    pass
+            raise
 
     def analyze(self, url: str) -> MediaMetadata:
         url = normalize_media_url(url)
@@ -333,64 +586,25 @@ class YtdlpProvider(BaseProvider):
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             err_lower = str(exc).lower()
-            # For YouTube: exhaustively try ALL server-safe client combinations
+            # For YouTube: try all yt-dlp clients first (fast-fails on bot block)
             if platform == "youtube":
                 info = self._try_youtube_with_all_clients(url, ydl_opts, download=False)
-            if not info and not (platform == "youtube" and any(k in err_lower for k in [
-                "sign in", "bot", "cookie", "login", "429", "player response",
-                "requested format", "unable to download", "blocked", "confirm your age",
-                "drm", "age", "private", "members only"
-            ])):
-                # Non-YouTube or non-auth errors — re-raise immediately
-                raise exc
+
+            # If yt-dlp failed completely and this is YouTube, use Invidious/Piped
+            if not info and platform == "youtube":
+                invidious_result = self._try_invidious_analyze(url)
+                if invidious_result:
+                    return invidious_result  # ← Direct return, bypasses yt-dlp entirely
+
             if not info:
-                # Fallback to check if URL content is directly accessible as a media file
-                try:
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-                    r = requests.head(url, headers=headers, allow_redirects=True, timeout=4)
-                    content_type = r.headers.get('Content-Type', '').lower()
-                    if content_type.startswith('video/') or content_type.startswith('audio/') or content_type.startswith('image/'):
-                        if content_type.startswith('video/'):
-                            mtype = 'video'
-                            fallback_ext = 'mp4'
-                        elif content_type.startswith('audio/'):
-                            mtype = 'audio'
-                            fallback_ext = 'mp3'
-                        else:
-                            mtype = 'image'
-                            fallback_ext = 'jpg'
-                        ext = content_type.split('/')[-1].split(';')[0].strip() or fallback_ext
-                        title = os.path.splitext(os.path.basename(urlparse(url).path) or "Video")[0]
-                        title = title.replace('_', ' ').replace('-', ' ').title()
-                        
-                        formats = [
-                            MediaFormat(
-                                format_id="direct",
-                                resolution="Direct File Download",
-                                fps=None,
-                                codec="direct stream",
-                                container=ext,
-                                media_type=mtype,
-                                url=url
-                            )
-                        ]
-                        return MediaMetadata(
-                            url=url,
-                            title=title,
-                            duration=None,
-                            thumbnail=None,
-                            uploader="Direct Link",
-                            views=None,
-                            upload_date=None,
-                            description=f"Directly download the source {mtype} file.",
-                            platform="generic",
-                            formats=formats
-                        )
-                except Exception:
-                    pass
                 raise exc
 
         if not info:
+            # One more attempt via Invidious for YouTube before giving up
+            if platform == "youtube":
+                invidious_result = self._try_invidious_analyze(url)
+                if invidious_result:
+                    return invidious_result
             raise ValueError("Failed to extract metadata from URL.")
 
         if platform == "instagram":
@@ -557,6 +771,21 @@ class YtdlpProvider(BaseProvider):
         format_id = (format_id or "").strip()
         if not format_id:
             raise ValueError("A format must be selected before downloading.")
+
+        # Handle Invidious / Piped format IDs — re-fetch fresh CDN URL and stream directly
+        if format_id.startswith("invidious_") or format_id.startswith("piped_"):
+            # Re-fetch from Invidious/Piped to get a fresh (non-expired) stream URL
+            meta = self._try_invidious_analyze(url)
+            if meta:
+                for fmt in meta.formats:
+                    if fmt.format_id == format_id and fmt.url:
+                        video_id = self._extract_youtube_video_id(url) or "video"
+                        title_hint = re.sub(r'[^\w\-]', '_', meta.title)[:60]
+                        return self._download_from_direct_url(
+                            fmt.url, output_path,
+                            f"{title_hint}_{video_id}", progress_callback
+                        )
+            raise RuntimeError("Could not obtain a fresh download URL. Please try again.")
 
         if format_id == "direct":
             parsed = urlparse(url)

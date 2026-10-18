@@ -153,12 +153,11 @@ class YtdlpProvider(BaseProvider):
         if shutil.which("node"):
             opts['js_runtimes'] = {'node': {}}
 
-        # For YouTube, bypass datacenter HTML webpage bot checks by default
+        # For YouTube, prioritize mobile clients (android, ios) to avoid bot detection and missing player response
         if platform == "youtube":
             opts['extractor_args'] = {
                 'youtube': {
-                    'player_client': ['web', 'mweb', 'android', 'ios'],
-                    'player_skip': ['webpage', 'configs']
+                    'player_client': ['android', 'ios', 'web']
                 }
             }
 
@@ -216,22 +215,25 @@ class YtdlpProvider(BaseProvider):
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             err_lower = str(exc).lower()
-            # If cookie lock or bot detection error occurred, try fallback with android/ios client without locked cookies
-            if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429"]):
-                try:
-                    fallback_opts = dict(ydl_opts)
-                    fallback_opts.pop('cookiesfrombrowser', None)
-                    fallback_opts.pop('cookiefile', None)
-                    fallback_opts['extractor_args'] = {
-                        'youtube': {
-                            'player_client': ['android', 'ios'],
-                            'player_skip': ['webpage', 'configs']
+            # If cookie lock, bot detection, or player response error occurred, try fallback clients
+            if platform == "youtube" and any(k in err_lower for k in ["sign in", "bot", "cookie", "login", "429", "player response", "requested format", "unable to download"]):
+                # Try fallback 1: Pure Android client
+                for fb_clients in [['android'], ['android', 'ios'], ['tv']]:
+                    try:
+                        fallback_opts = dict(ydl_opts)
+                        fallback_opts.pop('cookiesfrombrowser', None)
+                        fallback_opts.pop('cookiefile', None)
+                        fallback_opts['extractor_args'] = {
+                            'youtube': {
+                                'player_client': fb_clients
+                            }
                         }
-                    }
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
-                        info = ydl_fb.extract_info(url, download=False)
-                except Exception:
-                    pass
+                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                            info = ydl_fb.extract_info(url, download=False)
+                            if info and info.get('formats'):
+                                break
+                    except Exception:
+                        continue
             if not info:
                 # Fallback to check if URL content is directly accessible as a media file
                 try:
@@ -592,14 +594,13 @@ class YtdlpProvider(BaseProvider):
                         ydl_opts['format'] = "bestvideo+bestaudio/best"
                     else:
                         ydl_opts['format'] = "best"
-                # If YouTube bot/cookie error happened, switch to android client for next attempt
-                elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429"]):
+                # If YouTube bot/cookie/player response error happened, switch to android client for next attempt
+                elif platform == "youtube" and any(k in err_str for k in ["sign in", "bot", "cookie", "login", "429", "player response", "unable to download"]):
                     ydl_opts.pop('cookiesfrombrowser', None)
                     ydl_opts.pop('cookiefile', None)
                     ydl_opts['extractor_args'] = {
                         'youtube': {
-                            'player_client': ['android', 'ios'],
-                            'player_skip': ['webpage', 'configs']
+                            'player_client': ['android', 'ios']
                         }
                     }
                     if self._ffmpeg_available():

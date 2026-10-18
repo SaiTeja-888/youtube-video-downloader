@@ -285,7 +285,7 @@ def get_status(job_id: str, db: Session = Depends(get_db)):
                 db.refresh(job)
             except Exception:
                 pass
-        if job.file_path:
+        if job.file_path or (progress_info and progress_info.get("file_path")):
             res.file_url = f"/api/download-file/{job.id}"
 
     return res
@@ -295,14 +295,29 @@ def get_status(job_id: str, db: Session = Depends(get_db)):
 def download_file(job_id: str, db: Session = Depends(get_db)):
     """Serve a completed download file with Content-Disposition: attachment to force browser download."""
     job = db.query(DownloadJob).filter(DownloadJob.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
-    if job.status != "completed" or not job.file_path:
-        raise HTTPException(status_code=400, detail="File is not ready for download.")
-    if not os.path.exists(job.file_path):
-        raise HTTPException(status_code=404, detail="File no longer exists on server.")
+    file_path = job.file_path if job else None
+
+    # Fallback to Redis progress tracking if DB hasn't committed file_path yet
+    if not file_path:
+        progress_info = get_job_progress(job_id)
+        if progress_info and progress_info.get("file_path"):
+            file_path = progress_info["file_path"]
+
+    # Fallback to scanning download directory
+    if not file_path or not os.path.exists(file_path):
+        download_dir = settings.DOWNLOAD_DIR
+        if os.path.exists(download_dir):
+            for fname in os.listdir(download_dir):
+                if job_id in fname and not fname.endswith(".part"):
+                    candidate = os.path.join(download_dir, fname)
+                    if os.path.isfile(candidate):
+                        file_path = candidate
+                        break
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File is not ready or does not exist on server.")
     
-    filename = os.path.basename(job.file_path)
+    filename = os.path.basename(file_path)
     safe_filename = quote(filename)
     fallback_filename = filename.encode('ascii', errors='ignore').decode('ascii').replace('"', '\\"')
     if not fallback_filename:

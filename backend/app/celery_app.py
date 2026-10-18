@@ -31,7 +31,7 @@ celery_config = {
 # If unavailable, run Celery in "eager mode" where tasks execute synchronously on the caller thread.
 try:
     with celery_app.connection() as conn:
-        conn.ensure_connection(max_retries=1, timeout=2)
+        conn.ensure_connection(max_retries=5, interval_start=1, timeout=5)
     logger.info("Successfully connected to Celery message broker (RabbitMQ).")
 except Exception as e:
     logger.warning(

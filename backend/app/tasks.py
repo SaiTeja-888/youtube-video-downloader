@@ -12,43 +12,49 @@ from app.providers.manager import provider_manager
 logger = logging.getLogger(__name__)
 
 def update_db_job_status(job_id: str, status: str, progress: float = 0.0, file_path: str = None, file_size: int = None, error_message: str = None):
-    with SessionLocal() as db:
-        job = db.query(DownloadJob).filter(DownloadJob.id == job_id).first()
-        if job:
-            job.status = status
-            job.progress = progress
-            if file_path:
-                job.file_path = file_path
-            if file_size:
-                job.file_size = file_size
-            if error_message:
-                job.error_message = error_message
-            if status in ["completed", "failed"]:
-                job.completed_at = datetime.utcnow()
-            db.commit()
+    try:
+        with SessionLocal() as db:
+            job = db.query(DownloadJob).filter(DownloadJob.id == job_id).first()
+            if job:
+                job.status = status
+                job.progress = progress
+                if file_path:
+                    job.file_path = file_path
+                if file_size:
+                    job.file_size = file_size
+                if error_message:
+                    job.error_message = error_message
+                if status in ["completed", "failed"]:
+                    job.completed_at = datetime.utcnow()
+                db.commit()
+    except Exception as e:
+        logger.warning(f"Could not update DB job status for {job_id}: {e}")
 
 def increment_system_stats(platform: str, success: bool):
-    with SessionLocal() as db:
-        today = datetime.utcnow().date()
-        stat = db.query(SystemStat).filter(SystemStat.date == today).first()
-        if not stat:
-            stat = SystemStat(date=today)
-            db.add(stat)
+    try:
+        with SessionLocal() as db:
+            today = datetime.utcnow().date()
+            stat = db.query(SystemStat).filter(SystemStat.date == today).first()
+            if not stat:
+                stat = SystemStat(date=today)
+                db.add(stat)
+                db.commit()
+                db.refresh(stat)
+
+            stat.total_downloads += 1
+            if success:
+                stat.successful_downloads += 1
+            else:
+                stat.failed_downloads += 1
+
+            # Safe update platform count
+            counts = dict(stat.platforms_count or {})
+            counts[platform] = counts.get(platform, 0) + 1
+            stat.platforms_count = counts
+
             db.commit()
-            db.refresh(stat)
-
-        stat.total_downloads += 1
-        if success:
-            stat.successful_downloads += 1
-        else:
-            stat.failed_downloads += 1
-
-        # Safe update platform count
-        counts = dict(stat.platforms_count or {})
-        counts[platform] = counts.get(platform, 0) + 1
-        stat.platforms_count = counts
-
-        db.commit()
+    except Exception as e:
+        logger.warning(f"Could not increment system stats: {e}")
 
 @celery_app.task(name="app.tasks.download_media")
 def download_media_task(job_id: str, url: str, format_id: str):
@@ -90,8 +96,8 @@ def download_media_task(job_id: str, url: str, format_id: str):
 
         file_size = os.path.getsize(downloaded_file)
         
-        # Complete tasks
-        set_job_progress(job_id, 100.0, "completed")
+        # Complete tasks in both Redis and DB
+        set_job_progress(job_id, 100.0, "completed", file_path=downloaded_file, file_size=file_size)
         update_db_job_status(job_id, "completed", 100.0, file_path=downloaded_file, file_size=file_size)
         increment_system_stats(platform, success=True)
         
